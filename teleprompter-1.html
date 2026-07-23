@@ -1,0 +1,495 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>Voicecast — teleprompter</title>
+<style>
+  :root{
+    --ink:#f5f5f0;
+    --dim:rgba(245,245,240,0.38);
+    --accent:#ffb454;
+    --accent-dim:rgba(255,180,84,0.25);
+    --bg:#0a0a0a;
+    --panel:#141412;
+    --line:rgba(245,245,240,0.12);
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
+  html,body{height:100%; margin:0; overscroll-behavior:none;}
+  body{
+    background:var(--bg);
+    color:var(--ink);
+    font-family:'Courier New', ui-monospace, Menlo, monospace;
+    overflow:hidden;
+    touch-action:none;
+  }
+
+  /* ---------- SETUP SCREEN ---------- */
+  #setup{
+    position:fixed; inset:0;
+    display:flex; flex-direction:column;
+    padding:28px 22px 22px;
+    background:
+      radial-gradient(circle at 20% 0%, rgba(255,180,84,0.08), transparent 45%),
+      var(--bg);
+  }
+  .eyebrow{
+    font-size:11px; letter-spacing:0.18em; text-transform:uppercase;
+    color:var(--accent); margin-bottom:6px; font-weight:700;
+  }
+  h1{
+    font-family:Georgia, 'Times New Roman', serif;
+    font-size:28px; font-weight:400; margin:0 0 4px;
+    letter-spacing:-0.01em;
+  }
+  .sub{color:var(--dim); font-size:13px; margin:0 0 22px; line-height:1.5;}
+  textarea{
+    flex:1;
+    width:100%;
+    background:var(--panel);
+    border:1px solid var(--line);
+    border-radius:4px;
+    color:var(--ink);
+    font-family:Georgia, 'Times New Roman', serif;
+    font-size:17px;
+    line-height:1.7;
+    padding:16px;
+    resize:none;
+    outline:none;
+  }
+  textarea:focus{border-color:var(--accent-dim);}
+  textarea::placeholder{color:var(--dim);}
+
+  .row{display:flex; gap:10px; margin-top:14px; align-items:center;}
+  .row label{font-size:11px; letter-spacing:0.08em; text-transform:uppercase; color:var(--dim); white-space:nowrap;}
+  select{
+    background:var(--panel); color:var(--ink); border:1px solid var(--line);
+    border-radius:4px; padding:8px 10px; font-family:inherit; font-size:13px; flex:1;
+  }
+
+  #startBtn{
+    margin-top:18px;
+    background:var(--ink); color:#0a0a0a;
+    border:none; border-radius:4px;
+    padding:16px; font-size:15px; font-weight:700;
+    letter-spacing:0.02em;
+    font-family:'Courier New', monospace;
+    text-transform:uppercase;
+  }
+  #startBtn:active{opacity:0.8;}
+  #startBtn:disabled{opacity:0.35;}
+
+  #supportNote{
+    font-size:12px; color:var(--dim); margin-top:10px; line-height:1.5; text-align:center;
+  }
+  #supportNote.warn{color:var(--accent);}
+
+  /* ---------- STAGE (camera + prompter) ---------- */
+  #stage{
+    position:fixed; inset:0; display:none;
+  }
+  #cam{
+    position:absolute; inset:0;
+    width:100%; height:100%;
+    object-fit:cover;
+    transform:scaleX(-1);
+    background:#000;
+  }
+  #scrim{
+    position:absolute; inset:0;
+    background:linear-gradient(180deg, rgba(0,0,0,0.55) 0%, rgba(0,0,0,0.15) 22%, rgba(0,0,0,0.15) 78%, rgba(0,0,0,0.55) 100%);
+    pointer-events:none;
+  }
+
+  #promptWrap{
+    position:absolute; left:0; right:0; top:0; bottom:0;
+    overflow:hidden;
+    display:flex; align-items:center;
+    padding:0 6%;
+    pointer-events:none;
+  }
+  #promptText{
+    width:100%;
+    font-family:Georgia, 'Times New Roman', serif;
+    font-size:26px;
+    line-height:1.55;
+    color:rgba(255,255,255,0.34);
+    text-shadow:0 1px 6px rgba(0,0,0,0.6);
+    transition:transform 0.12s linear;
+    white-space:pre-wrap;
+  }
+  #promptText span.spoken{color:rgba(255,255,255,0.28);}
+  #promptText span.current{
+    color:#ffffff;
+    background:rgba(255,180,84,0.16);
+    border-radius:3px;
+  }
+  #promptText span.upcoming{color:rgba(255,255,255,0.92);}
+
+  #centerLine{
+    position:absolute; left:0; right:0; top:50%;
+    height:1px; pointer-events:none;
+  }
+
+  /* ---------- HUD ---------- */
+  #hud{
+    position:absolute; top:0; left:0; right:0;
+    display:flex; justify-content:space-between; align-items:center;
+    padding:14px 16px; padding-top:max(14px, env(safe-area-inset-top));
+    z-index:5;
+  }
+  .pill{
+    display:flex; align-items:center; gap:6px;
+    background:rgba(10,10,10,0.55);
+    border:1px solid rgba(245,245,240,0.15);
+    border-radius:20px;
+    padding:6px 12px;
+    font-size:11px; letter-spacing:0.06em; text-transform:uppercase;
+    backdrop-filter:blur(6px);
+  }
+  .dot{width:7px; height:7px; border-radius:50%; background:var(--dim);}
+  .dot.live{background:#ff5454; box-shadow:0 0 6px #ff5454;}
+  .iconbtn{
+    width:34px; height:34px; border-radius:50%;
+    background:rgba(10,10,10,0.55); border:1px solid rgba(245,245,240,0.15);
+    color:var(--ink); font-size:16px; line-height:1;
+    display:flex; align-items:center; justify-content:center;
+    backdrop-filter:blur(6px);
+  }
+  #hudRight{display:flex; gap:8px;}
+
+  #footer{
+    position:absolute; bottom:0; left:0; right:0;
+    display:flex; justify-content:center; align-items:center; gap:14px;
+    padding:16px; padding-bottom:max(16px, env(safe-area-inset-bottom));
+    z-index:5;
+  }
+  #playPause{
+    width:58px; height:58px; border-radius:50%;
+    background:var(--ink); border:none;
+    display:flex; align-items:center; justify-content:center;
+    font-size:20px; color:#0a0a0a;
+  }
+  #resetBtn, #restartBtn{
+    width:46px; height:46px; border-radius:50%;
+    background:rgba(10,10,10,0.55); border:1px solid rgba(245,245,240,0.15);
+    color:var(--ink); font-size:15px;
+    backdrop-filter:blur(6px);
+  }
+
+  #fallbackNote{
+    position:absolute; bottom:96px; left:0; right:0;
+    text-align:center; font-size:11px; color:rgba(255,180,84,0.85);
+    padding:0 20px; z-index:5; letter-spacing:0.03em;
+  }
+
+  .hidden{display:none !important;}
+</style>
+</head>
+<body>
+
+<!-- ============ SETUP SCREEN ============ -->
+<div id="setup">
+  <div class="eyebrow">Voicecast</div>
+  <h1>Paste your script</h1>
+  <p class="sub">The text scrolls as you speak — pause and it waits, speed up and it follows. Works best in Chrome on Android.</p>
+  <textarea id="scriptInput" placeholder="Paste or type what you want to say here...
+
+You can speak out of order, pause mid-sentence, or go off script for a bit — the highlight will pick back up when you return to the text."></textarea>
+
+  <div class="row">
+    <label for="camSelect">Camera</label>
+    <select id="camSelect">
+      <option value="user">Front (selfie)</option>
+      <option value="environment">Back</option>
+    </select>
+  </div>
+
+  <button id="startBtn">Start</button>
+  <div id="supportNote"></div>
+</div>
+
+<!-- ============ STAGE ============ -->
+<div id="stage">
+  <video id="cam" autoplay playsinline muted></video>
+  <div id="scrim"></div>
+
+  <div id="hud">
+    <div class="pill"><span id="micDot" class="dot"></span><span id="micLabel">mic off</span></div>
+    <div id="hudRight">
+      <button class="iconbtn" id="fontMinus">A-</button>
+      <button class="iconbtn" id="fontPlus">A+</button>
+      <button class="iconbtn" id="closeBtn">✕</button>
+    </div>
+  </div>
+
+  <div id="promptWrap">
+    <div id="promptText"></div>
+  </div>
+
+  <div id="fallbackNote" class="hidden">No speech recognition on this browser — using steady auto-scroll instead.</div>
+
+  <div id="footer">
+    <button id="restartBtn" title="Back to top">⟲</button>
+    <button id="playPause">▶</button>
+    <button id="resetBtn" title="Edit script">✎</button>
+  </div>
+</div>
+
+<script>
+(function(){
+  const setup = document.getElementById('setup');
+  const stage = document.getElementById('stage');
+  const scriptInput = document.getElementById('scriptInput');
+  const startBtn = document.getElementById('startBtn');
+  const supportNote = document.getElementById('supportNote');
+  const camSelect = document.getElementById('camSelect');
+  const camVideo = document.getElementById('cam');
+  const promptText = document.getElementById('promptText');
+  const promptWrap = document.getElementById('promptWrap');
+  const micDot = document.getElementById('micDot');
+  const micLabel = document.getElementById('micLabel');
+  const playPause = document.getElementById('playPause');
+  const resetBtn = document.getElementById('resetBtn');
+  const restartBtn = document.getElementById('restartBtn');
+  const closeBtn = document.getElementById('closeBtn');
+  const fontMinus = document.getElementById('fontMinus');
+  const fontPlus = document.getElementById('fontPlus');
+  const fallbackNote = document.getElementById('fallbackNote');
+
+  const SpeechRecognitionCtor = window.SpeechRecognition || window.webkitSpeechRecognition;
+  const hasSpeech = !!SpeechRecognitionCtor;
+
+  if(!hasSpeech){
+    supportNote.textContent = "This browser doesn't support live speech tracking — it'll fall back to a steady auto-scroll instead. For voice tracking, try Chrome on Android.";
+    supportNote.classList.add('warn');
+  } else {
+    supportNote.textContent = "Speech tracking supported in this browser.";
+  }
+
+  let words = [];       // {text, start, end} char offsets in original text, plus normalized
+  let spans = [];        // DOM spans per word
+  let currentIndex = -1;
+  let fontSize = 26;
+  let stream = null;
+  let recognition = null;
+  let recognizing = false;
+  let fallbackTimer = null;
+  let running = false;
+
+  function normalize(w){
+    return w.toLowerCase().replace(/[^a-z0-9']/g, '');
+  }
+
+  function buildScript(raw){
+    promptText.innerHTML = '';
+    spans = [];
+    words = [];
+    const tokens = raw.split(/(\s+)/); // keep whitespace tokens for layout
+    tokens.forEach(tok => {
+      if(/^\s+$/.test(tok)){
+        promptText.appendChild(document.createTextNode(tok));
+      } else if(tok.length){
+        const span = document.createElement('span');
+        span.textContent = tok;
+        span.className = 'upcoming';
+        promptText.appendChild(span);
+        spans.push(span);
+        words.push({norm: normalize(tok)});
+      }
+    });
+    currentIndex = -1;
+  }
+
+  function setCurrent(idx){
+    if(idx < 0) return;
+    for(let i=0;i<spans.length;i++){
+      if(i < idx) spans[i].className = 'spoken';
+      else if(i === idx) spans[i].className = 'current';
+      else spans[i].className = 'upcoming';
+    }
+    currentIndex = idx;
+    scrollToCurrent();
+  }
+
+  function scrollToCurrent(){
+    const target = spans[currentIndex] || spans[spans.length-1];
+    if(!target) return;
+    const wrapRect = promptWrap.getBoundingClientRect();
+    const targetRect = target.getBoundingClientRect();
+    const centerY = wrapRect.top + wrapRect.height/2;
+    const delta = targetRect.top - centerY;
+    const currentTransform = new DOMMatrix(getComputedStyle(promptText).transform);
+    const newY = currentTransform.m42 - delta;
+    promptText.style.transform = `translateY(${newY}px)`;
+  }
+
+  // Matches a stream of recognized words against the script, advancing one
+  // small step at a time so a single stray word can't skip whole paragraphs.
+  function matchWords(recognizedWords){
+    if(!recognizedWords.length) return;
+    const SKIP_WINDOW = 5;   // a recognized word can only match within the next 5 script words
+    const MAX_JUMP = 12;     // hard cap on how far one recognition event can move us forward
+
+    let sp = Math.max(0, currentIndex);
+    let bestMatch = currentIndex;
+
+    for(const rawWord of recognizedWords){
+      const rw = normalize(rawWord);
+      if(!rw) continue;
+      let found = -1;
+      for(let i = sp; i < Math.min(words.length, sp + SKIP_WINDOW); i++){
+        if(words[i].norm === rw){ found = i; break; }
+      }
+      if(found >= 0){
+        sp = found + 1;
+        bestMatch = found;
+      }
+    }
+
+    if(bestMatch > currentIndex){
+      const capped = Math.min(bestMatch, currentIndex + MAX_JUMP, spans.length - 1);
+      setCurrent(capped);
+    }
+  }
+
+  function startRecognition(){
+    if(!hasSpeech){
+      startFallbackScroll();
+      return;
+    }
+    recognition = new SpeechRecognitionCtor();
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.lang = 'en-US';
+
+    recognition.onresult = (e) => {
+      let transcript = '';
+      for(let i = e.resultIndex; i < e.results.length; i++){
+        transcript += ' ' + e.results[i][0].transcript;
+      }
+      const rw = transcript.trim().split(/\s+/).filter(Boolean);
+      matchWords(rw);
+    };
+    recognition.onerror = (e) => {
+      if(e.error === 'no-speech') return;
+      micLabel.textContent = 'mic error';
+      micDot.classList.remove('live');
+    };
+    recognition.onend = () => {
+      if(recognizing && running){
+        try{ recognition.start(); }catch(err){}
+      }
+    };
+    try{
+      recognition.start();
+      recognizing = true;
+      micDot.classList.add('live');
+      micLabel.textContent = 'listening';
+    }catch(err){
+      startFallbackScroll();
+    }
+  }
+
+  function stopRecognition(){
+    recognizing = false;
+    if(recognition){
+      try{ recognition.stop(); }catch(err){}
+    }
+    micDot.classList.remove('live');
+    micLabel.textContent = 'mic off';
+    stopFallbackScroll();
+  }
+
+  function startFallbackScroll(){
+    fallbackNote.classList.remove('hidden');
+    micLabel.textContent = 'auto-scroll';
+    let idx = currentIndex < 0 ? 0 : currentIndex;
+    fallbackTimer = setInterval(() => {
+      if(!running) return;
+      idx = Math.min(idx + 1, spans.length - 1);
+      setCurrent(idx);
+    }, 450);
+  }
+  function stopFallbackScroll(){
+    if(fallbackTimer){ clearInterval(fallbackTimer); fallbackTimer = null; }
+  }
+
+  async function startCamera(facing){
+    try{
+      stream = await navigator.mediaDevices.getUserMedia({
+        video:{ facingMode: facing },
+        audio:false
+      });
+      camVideo.srcObject = stream;
+      camVideo.style.transform = facing === 'user' ? 'scaleX(-1)' : 'scaleX(1)';
+    }catch(err){
+      alert('Camera access is needed to use Voicecast. ' + err.message);
+    }
+  }
+
+  function stopCamera(){
+    if(stream){
+      stream.getTracks().forEach(t => t.stop());
+      stream = null;
+    }
+  }
+
+  startBtn.addEventListener('click', async () => {
+    const raw = scriptInput.value.trim();
+    if(!raw){ scriptInput.focus(); return; }
+    buildScript(raw);
+    setup.style.display = 'none';
+    stage.style.display = 'block';
+    await startCamera(camSelect.value);
+    setCurrent(0);
+    running = true;
+    playPause.textContent = '❚❚';
+    startRecognition();
+  });
+
+  playPause.addEventListener('click', () => {
+    running = !running;
+    playPause.textContent = running ? '❚❚' : '▶';
+    if(running){
+      if(hasSpeech) startRecognition();
+    } else {
+      if(recognition){ try{ recognition.stop(); }catch(e){} recognizing = false; }
+      micDot.classList.remove('live');
+      micLabel.textContent = 'paused';
+    }
+  });
+
+  restartBtn.addEventListener('click', () => {
+    setCurrent(0);
+  });
+
+  resetBtn.addEventListener('click', () => {
+    running = false;
+    stopRecognition();
+    stopCamera();
+    stage.style.display = 'none';
+    setup.style.display = 'flex';
+  });
+
+  closeBtn.addEventListener('click', () => {
+    running = false;
+    stopRecognition();
+    stopCamera();
+    stage.style.display = 'none';
+    setup.style.display = 'flex';
+  });
+
+  fontMinus.addEventListener('click', () => {
+    fontSize = Math.max(16, fontSize - 2);
+    promptText.style.fontSize = fontSize + 'px';
+  });
+  fontPlus.addEventListener('click', () => {
+    fontSize = Math.min(44, fontSize + 2);
+    promptText.style.fontSize = fontSize + 'px';
+  });
+
+})();
+</script>
+</body>
+</html>
